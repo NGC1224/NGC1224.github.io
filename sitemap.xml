@@ -2,7 +2,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   
   <url>
-    <loc>https://blog.ngc1224.cn/posts/2013454d.html</loc>
+    <loc>https://blog.ngc1224.cn/posts/7fea3019.html</loc>
     
     <lastmod>2024-03-03</lastmod>
     
@@ -128,6 +128,15 @@
   </url>
   
   <url>
+    <loc>https://blog.ngc1224.cn/box/gallery/index.html</loc>
+    
+    <lastmod>2024-01-29</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
     <loc>https://blog.ngc1224.cn/box/animation/index.html</loc>
     
     <lastmod>2024-01-29</lastmod>
@@ -138,15 +147,6 @@
   
   <url>
     <loc>https://blog.ngc1224.cn/box/nav/index.html</loc>
-    
-    <lastmod>2024-01-29</lastmod>
-    
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  
-  <url>
-    <loc>https://blog.ngc1224.cn/box/gallery/index.html</loc>
     
     <lastmod>2024-01-29</lastmod>
     
@@ -182,14 +182,14 @@
 
   
   <url>
-    <loc>https://blog.ngc1224.cn/tags/Python/</loc>
+    <loc>https://blog.ngc1224.cn/tags/Markdown/</loc>
     <lastmod>2024-03-03</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.2</priority>
   </url>
   
   <url>
-    <loc>https://blog.ngc1224.cn/tags/Markdown/</loc>
+    <loc>https://blog.ngc1224.cn/tags/Python/</loc>
     <lastmod>2024-03-03</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.2</priority>
@@ -205,14 +205,14 @@
 
   
   <url>
-    <loc>https://blog.ngc1224.cn/categories/Python/</loc>
+    <loc>https://blog.ngc1224.cn/categories/%E8%BF%90%E7%BB%B4/</loc>
     <lastmod>2024-03-03</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.2</priority>
   </url>
   
   <url>
-    <loc>https://blog.ngc1224.cn/categories/%E8%BF%90%E7%BB%B4/</loc>
+    <loc>https://blog.ngc1224.cn/categories/Python/</loc>
     <lastmod>2024-03-03</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.2</priority>
