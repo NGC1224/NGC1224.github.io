@@ -2,6 +2,15 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   
   <url>
+    <loc>https://blog.ngc1224.cn/posts/7cc86ee6.html</loc>
+    
+    <lastmod>2024-03-18</lastmod>
+    
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  
+  <url>
     <loc>https://blog.ngc1224.cn/posts/7e055cf8.html</loc>
     
     <lastmod>2024-03-18</lastmod>
@@ -129,15 +138,6 @@
   
   <url>
     <loc>https://blog.ngc1224.cn/posts/2f1c38e6.html</loc>
-    
-    <lastmod>2024-03-18</lastmod>
-    
-    <changefreq>monthly</changefreq>
-    <priority>0.6</priority>
-  </url>
-  
-  <url>
-    <loc>https://blog.ngc1224.cn/posts/7cc86ee6.html</loc>
     
     <lastmod>2024-03-18</lastmod>
     
