@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI HandPose Particles</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-serif; }
+        canvas { display: block; }
+        #video-feed { position: absolute; bottom: 0; right: 0; opacity: 0; pointer-events: none; width: 320px; height: 240px; transform: scaleX(-1); }
+        
+        /* UI Overlay */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        /* Left Top Status */
+        #status-panel { position: absolute; top: 20px; left: 20px; color: #0ff; text-shadow: 0 0 5px #0ff; font-size: 16px; line-height: 1.5; pointer-events: auto; }
+        .status-row { background: rgba(0, 20, 40, 0.6); padding: 5px 10px; border: 1px solid #0ff; margin-bottom: 5px; border-radius: 4px; }
+        .label { font-weight: bold; color: #fff; }
+        
+        /* Right Panel */
+        #controls { position: absolute; top: 20px; right: 20px; width: 220px; background: rgba(0, 0, 0, 0.7); border: 1px solid #444; padding: 15px; border-radius: 8px; pointer-events: auto; color: #ddd; font-size: 12px; }
+        #controls h3 { margin: 0 0 10px 0; color: #fff; border-bottom: 1px solid #666; padding-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
+        .ctrl-row { margin-bottom: 10px; }
+        .ctrl-row label { display: block; margin-bottom: 4px; }
+        select, button { width: 100%; background: #222; color: #fff; border: 1px solid #555; padding: 4px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #333; }
+        
+        /* Bars */
+        .bar-container { width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+        .bar-fill { height: 100%; background: #0f0; width: 0%; transition: width 0.1s; }
+        
+        #fullscreen-btn { width: auto; padding: 2px 8px; font-size: 10px; }
+        
+        /* Loading Overlay */
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0ff; font-size: 24px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <video id="video-feed" playsinline></video>
+
+    <div id="ui-layer">
+        <div id="status-panel">
+            <div class="status-row"><span class="label">手型:</span> <span id="disp-pose">检测中...</span></div>
+            <div class="status-row"><span class="label">方向:</span> <span id="disp-dir">静止</span></div>
+        </div>
+
+        <div id="controls">
+            <h3>控制面板 <button id="fullscreen-btn">⛶ 全屏</button></h3>
+            
+            <div class="ctrl-row">
+                <label>形态 (由手型控制)</label>
+                <select id="sel-shape" disabled>
+                    <option value="text">初始 (AI李探长)</option>
+                    <option value="sphere">Sphere (握拳)</option>
+                    <option value="torus">Torus (手掌)</option>
+                    <option value="snow">雪花 (剪刀手)</option>
+                    <option value="helix">螺旋 (鹰爪)</option>
+                    <option value="star">星尘 (OK)</option>
+                </select>
+            </div>
+
+            <div class="ctrl-row">
+                <label>颜色模式</label>
+                <select id="sel-color">
+                    <option value="speed">速度映射 (冷暖)</option>
+                    <option value="hsl">HSL 循环</option>
+                    <option value="mono">单色 (青色)</option>
+                </select>
+            </div>
+
+            <div class="ctrl-row">
+                <label>幅度 (Amp): <span id="val-amp">0%</span></label>
+                <div class="bar-container"><div class="bar-fill" id="bar-amp" style="background:#f0f"></div></div>
+            </div>
+
+            <div class="ctrl-row">
+                <label>速度 (Spd): <span id="val-spd">0</span></label>
+                <div class="bar-container"><div class="bar-fill" id="bar-spd" style="background:#ff0"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading">正在加载 AI 模型...<br><span style="font-size:14px; color:#666">首次加载可能需要几十秒</span></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+        // --- Configuration & Constants ---
+        const PARTICLE_COUNT = 15000;
+        const FONT_NAME = 'Microsoft YaHei';
+        const TEXT_INIT = "AI李探长";
+        
+        // State
+        const state = {
+            pose: 'none',       // fist, palm, victory, claw, ok, index
+            direction: 'none',  // left, right, up, down, push, pull
+            amplitude: 0,       // 0-1
+            velocity: 0,        // pixels per ms (normalized)
+            isFast: false,      // threshold logic
+            handDetected: false,
+            colorMode: 'speed', // speed, hsl, mono
+            targetShape: 'text',
+            motionMode: 'trail' // trail, pulse (in/out), explode
+        };
+
+        // UI Elements
+        const ui = {
+            pose: document.getElementById('disp-pose'),
+            dir: document.getElementById('disp-dir'),
+            shape: document.getElementById('sel-shape'),
+            color: document.getElementById('sel-color'),
+            ampVal: document.getElementById('val-amp'),
+            ampBar: document.getElementById('bar-amp'),
+            spdVal: document.getElementById('val-spd'),
+            spdBar: document.getElementById('bar-spd'),
+            loading: document.getElementById('loading')
+        };
+
+        // --- Three.js Setup ---
+        const scene = new THREE.Scene();
+        // Fog for depth
+        scene.fog = new THREE.FogExp2(0x000000, 0.0008);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 2000);
+        camera.position.z = 600;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Perf opt
+        document.body.appendChild(renderer.domElement);
+
+        // --- Particle System ---
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(PARTICLE_COUNT * 3);
+        const colors = new Float32Array(PARTICLE_COUNT * 3);
+        const targets = new Float32Array(PARTICLE_COUNT * 3); // Target positions
+        const velocity = new Float32Array(PARTICLE_COUNT * 3); // For physics
+
+        // Initialize arrays
+        for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+            positions[i] = (Math.random() - 0.5) * 1000;
+            targets[i] = positions[i];
+            colors[i] = 1.0;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // Shader Material for Performance
+        const material = new THREE.PointsMaterial({
+            size: 3,
+            vertexColors: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.8
+        });
+
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        // --- Shape Generators ---
+        
+        // 1. Text Generator (Canvas scanning)
+        function generateTextPoints(text) {
+            const cvs = document.createElement('canvas');
+            const size = 512;
+            cvs.width = size;
+            cvs.height = size;
+            const ctx = cvs.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0,0,size,size);
+            ctx.fillStyle = '#fff';
+            ctx.font = `bold 100px "${FONT_NAME}"`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, size/2, size/2);
+            
+            const data = ctx.getImageData(0,0,size,size).data;
+            const points = [];
+            // Random sampling from white pixels
+            for(let i=0; i<size; i+=2) {
+                for(let j=0; j<size; j+=2) {
+                    if(data[(i*size + j)*4] > 128) {
+                        points.push({
+                            x: (j - size/2) * 3, // Scale up
+                            y: -(i - size/2) * 3, // Flip Y
+                            z: 0
+                        });
+                    }
+                }
+            }
+            return points;
+        }
+        
+        const textPoints = generateTextPoints(TEXT_INIT);
+
+        function getTargetPosition(i, shapeType, radius = 200) {
+            const idx = Math.floor(i / 3);
+            const r1 = Math.random();
+            const r2 = Math.random();
+            const r3 = Math.random();
+            
+            let x, y, z;
+
+            switch (shapeType) {
+                case 'text':
+                    if (idx < textPoints.length) {
+                        x = textPoints[idx].x;
+                        y = textPoints[idx].y;
+                        z = textPoints[idx].z;
+                    } else {
+                        // Surplus particles float around
+                        const ang = r1 * Math.PI * 2;
+                        const rad = 300 + r2 * 200;
+                        x = Math.cos(ang) * rad;
+                        y = Math.sin(ang) * rad;
+                        z = (r3 - 0.5) * 200;
+                    }
+                    break;
+
+                case 'sphere': // Fist
+                    const phi = Math.acos(-1 + (2 * idx) / PARTICLE_COUNT);
+                    const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
+                    x = radius * Math.cos(theta) * Math.sin(phi);
+                    y = radius * Math.sin(theta) * Math.sin(phi);
+                    z = radius * Math.cos(phi);
+                    break;
+
+                case 'torus': // Palm
+                    const u = r1 * Math.PI * 2;
+                    const v = r2 * Math.PI * 2;
+                    const tube = radius * 0.4;
+                    x = (radius + tube * Math.cos(v)) * Math.cos(u);
+                    y = (radius + tube * Math.cos(v)) * Math.sin(u);
+                    z = tube * Math.sin(v);
+                    
+                    // Rotate to face camera
+                    const tx = x;
+                    x = tx; 
+                    y = y * Math.cos(1) - z * Math.sin(1);
+                    z = y * Math.sin(1) + z * Math.cos(1);
+                    break;
+
+                case 'snow': // Victory
+                    // Hexagonal fractal-ish
+                    const branches = 6;
+                    const arm = Math.floor(r1 * branches);
+                    const dist = r2 * radius * 1.5;
+                    const angle = (arm / branches) * Math.PI * 2;
+                    const spread = (r3 - 0.5) * 0.5 * (1 - r2); // Tighter at tips
+                    x = Math.cos(angle + spread) * dist;
+                    y = Math.sin(angle + spread) * dist;
+                    z = (Math.random() - 0.5) * 20;
+                    break;
+                
+                case 'helix': // Claw (Eagle)
+                    const h = (r1 - 0.5) * radius * 3;
+                    const turn = h * 0.1;
+                    const radH = radius * (1 - Math.abs(h)/(radius*1.5)) + 50; // Tapered
+                    x = Math.cos(turn) * radH;
+                    y = h;
+                    z = Math.sin(turn) * radH;
+                    break;
+
+                case 'star': // OK
+                    // Random cloud
+                    const thetaS = 2 * Math.PI * r1;
+                    const phiS = Math.acos(2 * r2 - 1);
+                    const radS = radius * Math.pow(r3, 1/3); // Uniform sphere
+                    x = radS * Math.sin(phiS) * Math.cos(thetaS);
+                    y = radS * Math.sin(phiS) * Math.sin(thetaS);
+                    z = radS * Math.cos(phiS);
+                    // Add trails effect later in animation loop
+                    break;
+
+                default: 
+                    x = (r1 - 0.5) * 500;
+                    y = (r2 - 0.5) * 500;
+                    z = (r3 - 0.5) * 500;
+            }
+            
+            return {x, y, z};
+        }
+
+        // --- Logic: AI Hand Tracking ---
+        
+        let handLandmarker = null;
+        let lastVideoTime = -1;
+        const video = document.getElementById('video-feed');
+
+        // History for motion detection
+        const handHistory = []; 
+        const HISTORY_LEN = 10; // frames to keep
+
+        async function initAI() {
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+            );
+            
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 1
+            });
+            
+            startCamera();
+        }
+
+        function startCamera() {
+            navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } })
+                .then((stream) => {
+                    video.srcObject = stream;
+                    video.addEventListener('loadeddata', () => {
+                        video.play();
+                        ui.loading.style.display = 'none';
+                        requestAnimationFrame(loop);
+                    });
+                });
+        }
+
+        // --- Gesture & Motion Recognition ---
+
+        function dist(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2) + Math.pow(p1.z - p2.z, 2));
+        }
+
+        function analyzeHand(landmarks) {
+            // Landmarks: 0=wrist, 4=thumb_tip, 8=index_tip, 12=middle_tip, 16=ring_tip, 20=pinky_tip
+            // PIP joints: 6, 10, 14, 18. MCP joints: 5, 9, 13, 17.
+            
+            // 1. Detect Static Pose
+            const tips = [8, 12, 16, 20];
+            const pips = [6, 10, 14, 18];
+            const mcps = [5, 9, 13, 17];
+            
+            let fingersExtended = [0, 0, 0, 0]; // Index, Middle, Ring, Pinky
+            
+            // Basic extension check: Tip y < PIP y (screen coord system inverted usually, but MP is normalized 0-1)
+            // MP coords: y increases downwards. So Tip < PIP means extended UP.
+            // BUT hand can rotate. Better check: Distance from Wrist(0).
+            const wrist = landmarks[0];
+            
+            for(let i=0; i<4; i++) {
+                if (dist(landmarks[tips[i]], wrist) > dist(landmarks[pips[i]], wrist) * 1.1) {
+                    fingersExtended[i] = 1;
+                }
+            }
+            
+            // Thumb check
+            const thumbExtended = dist(landmarks[4], landmarks[17]) > dist(landmarks[3], landmarks[17]); // Thumb tip away from pinky base
+            
+            // Determine Pose
+            let pose = 'unknown';
+            const sumExt = fingersExtended.reduce((a,b)=>a+b, 0);
+
+            // Special: Check OK (Thumb tip close to Index tip)
+            const thumbIndexDist = dist(landmarks[4], landmarks[8]);
+            
+            if (sumExt === 0 && !thumbExtended) pose = 'fist'; // 握拳
+            else if (sumExt === 4 && thumbExtended) pose = 'palm'; // 手掌
+            else if (fingersExtended[0] && fingersExtended[1] && !fingersExtended[2] && !fingersExtended[3]) pose = 'victory'; // 剪刀
+            else if (fingersExtended[0] && sumExt === 1) pose = 'index'; // 竖食指
+            else if (thumbIndexDist < 0.05 && fingersExtended[1] && fingersExtended[2] && fingersExtended[3]) pose = 'ok';
+            else if (sumExt === 0 && !thumbExtended === false) { 
+               // Claw heuristic: Fingers not fully extended but not fully curled?
+               // Simplified: If "unknown" and fingers curled somewhat but spread?
+               // Let's force Claw if it's kinda curled.
+               pose = 'claw'; // Fallback for "Eagle"
+            }
+            
+            // Refine Claw: All fingers bent (Tip y > PIP y relative to wrist orientation)
+            // Hard to do perfectly without 3D vectors.
+            // Let's map strict rules, default to last known or Index if confused.
+            if (pose === 'unknown') {
+                // Heuristic for claw: fingertips are roughly equidistant from wrist?
+                pose = 'claw'; 
+            }
+
+            state.pose = pose;
+
+            // 2. Motion & Speed & Amplitude
+            const palmCenter = landmarks[9]; // Middle MCP is stable center
+            handHistory.push({x: palmCenter.x, y: palmCenter.y, z: palmCenter.z, t: Date.now()});
+            if (handHistory.length > HISTORY_LEN) handHistory.shift();
+
+            if (handHistory.length > 2) {
+                const latest = handHistory[handHistory.length-1];
+                const prev = handHistory[0];
+                const dt = latest.t - prev.t;
+                
+                // Displacement
+                const dx = latest.x - prev.x;
+                const dy = latest.y - prev.y;
+                const dz = latest.z - prev.z; // Depth change
+                
+                // Speed (pixels equivalent / ms)
+                const distMoved = Math.sqrt(dx*dx + dy*dy); // Screen plane speed
+                const speed = distMoved / dt * 1000; // units per second
+                
+                // Thresholds
+                state.velocity = Math.min(speed, 2.0); // Cap at 2.0 for visualization
+                state.isFast = dt < 200 && distMoved > 0.05; // Quick movement
+                
+                // Amplitude (Distance from center of screen 0.5, 0.5)
+                const amp = Math.sqrt(Math.pow(latest.x - 0.5, 2) + Math.pow(latest.y - 0.5, 2));
+                // Map 0 -> 0.4 (approx corner) to 0 -> 100%
+                state.amplitude = Math.min(amp / 0.4, 1.0); 
+
+                // Direction
+                // 3.2 Rules: LR, UD, InOut
+                if (Math.abs(dz) > Math.abs(dx) * 2 && Math.abs(dz) > Math.abs(dy) * 2) {
+                    state.direction = dz < 0 ? 'push' : 'pull'; // Z decreases as hand gets closer to camera usually? MP Z is relative to wrist.
+                    // Actually MP Z: smaller value is closer to camera.
+                    // Let's use history. If Z decreases, it's coming In (Push).
+                } else if (Math.abs(dx) > Math.abs(dy)) {
+                    state.direction = dx > 0 ? 'left' : 'right'; // Mirror effect?
+                    // Video is flipped. 
+                } else {
+                    state.direction = dy > 0 ? 'down' : 'up'; // Y increases downwards
+                }
+            }
+        }
+
+        // --- Rule Mapping (Rule 3) ---
+
+        function applyRules() {
+            if (!state.handDetected) return;
+
+            // 3.1 Pose -> Shape
+            switch (state.pose) {
+                case 'fist': state.targetShape = 'sphere'; break;
+                case 'palm': state.targetShape = 'torus'; break;
+                case 'victory': state.targetShape = 'snow'; break;
+                case 'claw': state.targetShape = 'helix'; break;
+                case 'ok': state.targetShape = 'star'; break;
+                case 'index': 
+                    // Random switch every 2 seconds or continuous? 
+                    // "Random switch" implies logic. Let's just cycle based on time.
+                    const shapes = ['sphere','torus','snow','helix','star'];
+                    state.targetShape = shapes[Math.floor(Date.now() / 1000) % 5];
+                    break;
+            }
+
+            // 3.2 Motion -> Motion Mode
+            const dir = state.direction;
+            if (dir === 'left' || dir === 'right') state.motionMode = 'trail';
+            else if (dir === 'up' || dir === 'down') state.motionMode = 'pulse';
+            else if (dir === 'push' || dir === 'pull') state.motionMode = 'explode';
+
+            // 3.3 Amplitude -> Radius
+            // Small (0-40%) -> 0-300px, Large (>40%) -> 300-800px
+            // Linear Mapping
+            let targetRadius = 300;
+            if (state.amplitude <= 0.4) {
+                targetRadius = (state.amplitude / 0.4) * 300;
+            } else {
+                targetRadius = 300 + ((state.amplitude - 0.4) / 0.6) * 500;
+            }
+            // Clamp min radius so it doesn't vanish
+            targetRadius = Math.max(150, targetRadius);
+
+            // 3.4 Speed -> Color
+            // Handled in render loop (HSL calc)
+
+            // Update UI
+            ui.pose.innerText = state.pose.toUpperCase();
+            ui.dir.innerText = state.direction.toUpperCase();
+            ui.shape.value = state.targetShape;
+            
+            ui.ampVal.innerText = Math.round(state.amplitude * 100) + '%';
+            ui.ampBar.style.width = (state.amplitude * 100) + '%';
+            
+            const spdNorm = Math.min(state.velocity / 1.5, 1);
+            ui.spdVal.innerText = state.velocity.toFixed(2);
+            ui.spdBar.style.width = (spdNorm * 100) + '%';
+
+            // Return radius for particle update
+            return targetRadius;
+        }
+
+
+        // --- Main Loop ---
+        let clock = new THREE.Clock();
+        let frameCount = 0;
+        let hueOffset = 0;
+
+        function loop() {
+            const delta = clock.getDelta();
+            const now = Date.now();
+            
+            // 1. AI Detection
+            if (handLandmarker && video.videoWidth > 0 && now - lastVideoTime > 30) { // Limit AI FPS to ~30 for perf
+                lastVideoTime = now;
+                const results = handLandmarker.detectForVideo(video, now);
+                if (results.landmarks && results.landmarks.length > 0) {
+                    state.handDetected = true;
+                    analyzeHand(results.landmarks[0]);
+                } else {
+                    state.handDetected = false;
+                    // Reset slightly
+                    state.velocity *= 0.9;
+                    state.amplitude *= 0.9;
+                }
+            }
+
+            // 2. Logic Update
+            const currentRadius = applyRules() || 300;
+
+            // 3. Particle Animation
+            const posAttr = geometry.attributes.position;
+            const colAttr = geometry.attributes.color;
+            
+            // Color Logic (Rule 3.4 & 2.2)
+            let h = 0.5, s = 1.0, l = 0.6;
+            
+            if (ui.color.value === 'speed') {
+                // Slow (240 deg/Blue) -> Fast (0 deg/Red)
+                // Map speed 0->1.5 to Hue 240->360(0)
+                // 240 is 0.66 in 0-1 range.
+                // We want cold (0.66) to warm (0.0 or 1.0)
+                // Let's go 0.66 -> 0.0
+                const speedFac = Math.min(state.velocity / 1.5, 1.0);
+                h = 0.66 - (speedFac * 0.66); 
+            } else if (ui.color.value === 'hsl') {
+                hueOffset += delta * 0.1;
+                h = hueOffset % 1;
+            } else {
+                h = 0.5; // Cyan
+            }
+
+            const baseColor = new THREE.Color().setHSL(h, s, l);
+            
+            // Update Particles
+            // To maintain 55fps with 15k particles on CPU, we must be efficient.
+            // Ideally this logic moves to Vertex Shader, but logic is complex.
+            // Using a "seek target" approach.
+
+            // Pre-calculate shape targets only if shape changed? 
+            // No, radius changes constantly. Need dynamic target calc.
+            // Optimization: Update a subset of particles or use simple math.
+            
+            // Let's update targets every frame but use simple easing.
+            
+            // Motion Mode modifiers
+            let explosionFactor = 0;
+            if (state.motionMode === 'explode' && state.direction === 'push') explosionFactor = 1.0;
+            
+            const time = now * 0.001;
+            
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const ix = i * 3;
+                const iy = i * 3 + 1;
+                const iz = i * 3 + 2;
+
+                // 1. Calculate Target for this particle based on current Shape
+                const tgt = getTargetPosition(i, state.targetShape, currentRadius);
+                
+                // Rule 3.2 Motion Effects applied to Target
+                if (state.motionMode === 'pulse') {
+                    const pulse = 1 + Math.sin(time * 5) * 0.2;
+                    tgt.x *= pulse;
+                    tgt.y *= pulse;
+                    tgt.z *= pulse;
+                }
+                
+                if (state.motionMode === 'trail') {
+                    // Handled by slower lerp?
+                    // Or add noise based on direction
+                     if (state.direction === 'left') tgt.x += Math.sin(time*10 + i)*20;
+                }
+
+                if (explosionFactor > 0) {
+                    tgt.x *= (1 + explosionFactor * 2);
+                    tgt.y *= (1 + explosionFactor * 2);
+                    tgt.z *= (1 + explosionFactor * 2);
+                }
+
+                // 2. Move Particle (Lerp)
+                // Speed depends on "Fast/Slow" state
+                const lerpSpeed = state.isFast ? 0.2 : 0.05;
+                
+                positions[ix] += (tgt.x - positions[ix]) * lerpSpeed;
+                positions[iy] += (tgt.y - positions[iy]) * lerpSpeed;
+                positions[iz] += (tgt.z - positions[iz]) * lerpSpeed;
+
+                // 3. Color Update
+                // Add some variation based on particle index
+                colors[ix] = baseColor.r;
+                colors[iy] = baseColor.g;
+                colors[iz] = baseColor.b;
+            }
+
+            posAttr.needsUpdate = true;
+            colAttr.needsUpdate = true;
+            
+            // Camera gentle float
+            /*camera.position.x = Math.sin(time * 0.2) * 50;
+            camera.position.y = Math.cos(time * 0.3) * 50;
+            camera.lookAt(0,0,0);*/
+
+            renderer.render(scene, camera);
+            requestAnimationFrame(loop);
+        }
+
+        // --- Controls ---
+        document.getElementById('sel-color').addEventListener('change', (e) => state.colorMode = e.target.value);
+        document.getElementById('fullscreen-btn').addEventListener('click', () => {
+            if (!document.fullscreenElement) document.body.requestFullscreen();
+            else document.exitFullscreen();
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize
+        initAI();
+
+    </script>
+</body>
+</html>
